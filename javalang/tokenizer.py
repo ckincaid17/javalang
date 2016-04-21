@@ -246,29 +246,47 @@ class JavaTokenizer(object):
             i = self.data.find('\n', self.i + 2)
 
             if i == -1:
-                self.i = self.length
-                return
+                i = self.length
+                # self.i = self.length
+                # return
+            else:
+                i += 1
 
-            i += 1
+            # cache these for the position counter
+            self.prev_current_line = self.current_line
+            self.prev_start_of_line = self.start_of_line
 
             self.start_of_line = i
             self.current_line += 1
-            #self.i = i
-            self.j = i-1
+
+            # cache these for comments to work properly
+            self.comment_i = self.i
+            self.comment_j = i
+
+            self.i = i
 
         else:
             i = self.data.find('*/', self.i + 2)
 
             if i == -1:
+                i = self.length
                 self.i = self.length
-                return
+                #return
+            else:
+                i += 2
 
-            i += 2
+            # cache these for the position counter
+            self.prev_current_line = self.current_line
+            self.prev_start_of_line = self.start_of_line
 
             self.start_of_line = i
             self.current_line += self.data.count('\n', self.i, i)
-            #self.i = i
-            self.j = i
+
+            # cache these for comments to work properly
+            self.comment_i = self.i
+            self.comment_j = i
+
+            self.i = i
 
     def try_javadoc_comment(self):
         if self.i + 2 >= self.length or self.data[self.i + 2] != '*':
@@ -282,9 +300,16 @@ class JavaTokenizer(object):
 
         j += 2
 
+        # cache these for the position counter
+        self.prev_current_line = self.current_line
+        self.prev_start_of_line = self.start_of_line
+
         self.start_of_line = j
         self.current_line += self.data.count('\n', self.i, j)
         self.j = j
+
+        self.comment_i = self.i
+        self.comment_j = self.j
 
         return True
 
@@ -522,13 +547,17 @@ class JavaTokenizer(object):
                 continue
 
             elif startswith in ("//", "/*"):
+                print "comment", self.i, self.j, self.current_line
                 if startswith == "/*" and self.try_javadoc_comment():
                     self.javadoc = self.data[self.i:self.j]
-                    #self.i = self.j
+                    self.i = self.j
                 else:
                     self.read_comment()
                 token_type = Comment
-                #continue
+                position = (self.prev_current_line, self.comment_i - self.prev_start_of_line)
+                token = token_type(self.data[self.comment_i:self.comment_j], position, self.javadoc)
+                yield token
+                continue
 
             elif startswith == '..' and self.try_operator():
                 # Ensure we don't mistake a '...' operator as a sequence of

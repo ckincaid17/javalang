@@ -139,6 +139,9 @@ class Annotation(JavaToken):
 class Identifier(JavaToken):
     pass
 
+class Comment(JavaToken):
+    pass
+
 
 class JavaTokenizer(object):
 
@@ -250,7 +253,8 @@ class JavaTokenizer(object):
 
             self.start_of_line = i
             self.current_line += 1
-            self.i = i
+            #self.i = i
+            self.j = i-1
 
         else:
             i = self.data.find('*/', self.i + 2)
@@ -263,7 +267,8 @@ class JavaTokenizer(object):
 
             self.start_of_line = i
             self.current_line += self.data.count('\n', self.i, i)
-            self.i = i
+            #self.i = i
+            self.j = i
 
     def try_javadoc_comment(self):
         if self.i + 2 >= self.length or self.data[self.i + 2] != '*':
@@ -519,10 +524,11 @@ class JavaTokenizer(object):
             elif startswith in ("//", "/*"):
                 if startswith == "/*" and self.try_javadoc_comment():
                     self.javadoc = self.data[self.i:self.j]
-                    self.i = self.j
+                    #self.i = self.j
                 else:
                     self.read_comment()
-                continue
+                token_type = Comment
+                #continue
 
             elif startswith == '..' and self.try_operator():
                 # Ensure we don't mistake a '...' operator as a sequence of

@@ -265,7 +265,6 @@ class JavaTokenizer(object):
                 token_type = Comment
                 position = (self.current_line, word_i - self.start_of_line)
                 token = token_type(self.data[word_i:word_j], position, self.javadoc)
-                print token
                 yield token
 
               self.i = word_j 
@@ -274,7 +273,6 @@ class JavaTokenizer(object):
             self.current_line = cache_current_line + 1
 
             self.i = i+1
-            print self.start_of_line, self.current_line, self.i
 
         else:
             j = self.data.find('*/', self.i + 2)
@@ -302,7 +300,6 @@ class JavaTokenizer(object):
                   token_type = Comment
                   position = (self.comment_current_line, word_i - self.comment_start_of_line)
                   token = token_type(self.data[word_i:word_j], position, self.javadoc)
-                  print token
                   yield token
                 i = word_j + 1
               i = eol + 1
@@ -597,7 +594,7 @@ class JavaTokenizer(object):
                 if startswith == "/*" and self.try_javadoc_comment():
                     comment_tokens = self.try_javadoc_comment()
                     self.javadoc = self.data[self.i:self.j]
-                    for token in comment_tokens: print token; yield token
+                    for token in comment_tokens: yield token
                     self.current_line = self.comment_current_line
                     self.start_of_line = self.comment_start_of_line
                     self.i = self.j

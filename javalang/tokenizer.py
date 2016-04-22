@@ -247,21 +247,28 @@ class JavaTokenizer(object):
 
             if i == -1:
                 i = self.length
-                # self.i = self.length
-                # return
             else:
                 i += 1
 
-            # cache these for the position counter
-            self.prev_current_line = self.current_line
-            self.prev_start_of_line = self.start_of_line
+            self.i += 2 # after //
+            while self.i < i:
+              if self.data[self.i].isspace():
+                self.consume_whitespace()
+              word_i = self.i
+              word_j = word_i
+              while word_j < i and not self.data[word_j].isspace():
+                word_j += 1
 
+              if word_i != word_j:
+                token_type = Comment
+                position = (self.current_line, word_i - self.start_of_line)
+                token = token_type(self.data[word_i:word_j], position, self.javadoc)
+                yield token
+
+              self.i = word_j 
+      
             self.start_of_line = i
             self.current_line += 1
-
-            # cache these for comments to work properly
-            self.comment_i = self.i
-            self.comment_j = i
 
             self.i = i
 
@@ -271,47 +278,69 @@ class JavaTokenizer(object):
             if i == -1:
                 i = self.length
                 self.i = self.length
-                #return
-            else:
-                i += 2
+            
+            self.i += 2 # after /*
+            while self.i < i:
+              eol = self.data.find('\n', self.i, i)
+              if eol == -1: eol = i
+              while self.i < eol:
+                if self.data[self.i].isspace():
+                  self.consume_whitespace()
+                word_i = self.i
+                word_j = word_i + 1
+                while word_j < eol and not self.data[word_j].isspace():
+                  word_j += 1
+                if word_i != word_j:
+                  token_type = Comment
+                  position = (self.current_line, word_i - self.start_of_line)
+                  token = token_type(self.data[word_i:word_j], position, self.javadoc)
+                  yield token
+                self.i = word_j + 1
+              self.i = eol + 1
+              self.start_of_line = self.i
+              self.current_line += 1
 
-            # cache these for the position counter
-            self.prev_current_line = self.current_line
-            self.prev_start_of_line = self.start_of_line
-
-            self.start_of_line = i
-            self.current_line += self.data.count('\n', self.i, i)
-
-            # cache these for comments to work properly
-            self.comment_i = self.i
-            self.comment_j = i
-
-            self.i = i
+            self.i = i + 2
 
     def try_javadoc_comment(self):
+        javadoc_tokens = []
         if self.i + 2 >= self.length or self.data[self.i + 2] != '*':
-            return False
+            return javadoc_tokens
 
         j = self.data.find('*/', self.i + 2)
 
         if j == -1:
+            j = self.length
             self.j = self.length
-            return False
-
-        j += 2
 
         # cache these for the position counter
-        self.prev_current_line = self.current_line
-        self.prev_start_of_line = self.start_of_line
+        self.comment_current_line = self.current_line
+        self.comment_start_of_line = self.start_of_line
+        
+        i = self.i + 2 # after /*
+        while i < j:
+          eol = self.data.find('\n', i, j)
+          if eol == -1: eol = j
+          while i < eol:
+            if self.data[i].isspace():
+              self.consume_whitespace()
+            word_i = i
+            word_j = word_i + 1
+            while word_j < eol and not self.data[word_j].isspace():
+              word_j += 1
+            if word_i != word_j:
+              token_type = Comment
+              position = (self.comment_current_line, word_i - self.comment_start_of_line)
+              token = token_type(self.data[word_i:word_j], position, self.javadoc)
+              javadoc_tokens.append(token)
+            i = word_j + 1
+          i = eol + 1
+          self.comment_start_of_line = i
+          self.comment_current_line += 1
 
-        self.start_of_line = j
-        self.current_line += self.data.count('\n', self.i, j)
-        self.j = j
+        self.j = j + 2
 
-        self.comment_i = self.i
-        self.comment_j = self.j
-
-        return True
+        return javadoc_tokens
 
     def read_decimal_float_or_integer(self):
         orig_i = self.i
@@ -547,16 +576,16 @@ class JavaTokenizer(object):
                 continue
 
             elif startswith in ("//", "/*"):
-                print "comment", self.i, self.j, self.current_line
                 if startswith == "/*" and self.try_javadoc_comment():
+                    comment_tokens = self.try_javadoc_comment()
                     self.javadoc = self.data[self.i:self.j]
+                    for token in comment_tokens: yield token
                     self.i = self.j
+                    self.current_line = self.comment_current_line
+                    self.start_of_line = self.comment_start_of_line
                 else:
-                    self.read_comment()
-                token_type = Comment
-                position = (self.prev_current_line, self.comment_i - self.prev_start_of_line)
-                token = token_type(self.data[self.comment_i:self.comment_j], position, self.javadoc)
-                yield token
+                    comment_tokens = self.read_comment()
+                    for token in comment_tokens: yield token
                 continue
 
             elif startswith == '..' and self.try_operator():

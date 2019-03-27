@@ -8,10 +8,9 @@ class LexerError(Exception):
     pass
 
 class JavaToken(object):
-    def __init__(self, value, position=None, javadoc=None):
+    def __init__(self, value, position=None):
         self.value = value
         self.position = position
-        self.javadoc = javadoc
 
     def __repr__(self):
         if self.position:
@@ -90,6 +89,9 @@ class String(Literal):
 class Null(Literal):
     pass
 
+class Space(Literal):
+    pass
+
 class Separator(JavaToken):
     VALUES = set(['(', ')', '{', '}', '[', ']', ';', ',', '.'])
 
@@ -155,6 +157,7 @@ class JavaTokenizer(object):
         self.current_line = 1
         self.start_of_line = 0
 
+        # The element at index i is the set of operators with length i + 1
         self.operators = [set() for i in range(0, Operator.MAX_LEN)]
 
         for v in Operator.VALUES:
@@ -162,29 +165,25 @@ class JavaTokenizer(object):
 
         self.whitespace_consumer = re.compile(r'[^\s]')
 
-        self.javadoc = None
-
-
     def reset(self):
         self.i = 0
         self.j = 0
 
     def consume_whitespace(self):
-        match = self.whitespace_consumer.search(self.data, self.i + 1)
+        match = self.whitespace_consumer.search(self.data, self.i)
 
-        if not match:
-            self.i = self.length
-            return
+        # Get all the spaces before the next non-space character
+        self.j = self.length if match is None else match.start()
+        position = (self.current_line, self.i - self.start_of_line)
+        token = Space(self.data[self.i:self.j], position)
 
-        i = match.start()
+        last_newline = self.data.rfind('\n', self.i, self.j)
+        if last_newline != -1:
+            self.start_of_line = last_newline + 1
+        self.current_line += token.value.count('\n')
+        self.i = self.j
 
-        start_of_line = self.data.rfind('\n', self.i, i)
-
-        if start_of_line != -1:
-            self.start_of_line = start_of_line
-            self.current_line += self.data.count('\n', self.i, i)
-
-        self.i = i
+        return token
 
     def read_string(self):
         delim = self.data[self.i]
@@ -242,120 +241,43 @@ class JavaTokenizer(object):
         return False
 
     def read_comment(self):
+        """Returns a pseudo-"token" containing an entire comment: either a
+        single-line comment set off by "//" or a multi-line comment starting
+        with "/*" and ending with "*/". Javadoc comments are naturally handled
+        by the multi-line case and are not treated specially."""
+
         if self.data[self.i + 1] == '/':
-            i = self.data.find('\n', self.i + 2)
+            # // and */ cases
+            end_of_line = self.data.find('\n', self.i + 2)
 
-            if i == -1:
-                i = self.length
+            self.j = self.length if end_of_line == -1 else end_of_line
 
-            self.i += 2 # after //
-
-            # consume_whitespace tinkers with current line, so cache it to avoid issues
-            cache_current_line = self.current_line
-
-            while self.i < i:
-              if self.data[self.i].isspace():
-                self.consume_whitespace()
-              word_i = self.i
-              word_j = word_i
-              while word_j < i and not self.data[word_j].isspace():
-                word_j += 1
-
-              if word_i != word_j:
-                token_type = Comment
-                position = (self.current_line, word_i - self.start_of_line)
-                token = token_type(self.data[word_i:word_j], position, self.javadoc)
-                yield token
-
-              self.i = word_j 
-
-            self.start_of_line = i+1
-            self.current_line = cache_current_line + 1
-
-            self.i = i+1
+            position = (self.current_line, self.i - self.start_of_line)
+            token = Comment(self.data[self.i:self.j], position)
+            self.i = self.j
+            # Assumption: A single-line comment extends to the end of a line
+            self.start_of_line = self.j
+            return token
 
         else:
-            j = self.data.find('*/', self.i + 2)
+            # /* case
+            end_of_comment = self.data.find('*/', self.i + 2)
 
-            if j == -1:
-                j = self.length
+            if end_of_comment == -1:
+                end_of_comment = self.length
+            else:
+                end_of_comment += 2 # Move past "*/"
 
-            # cache these for the position counter
-            self.comment_current_line = self.current_line
-            self.comment_start_of_line = self.start_of_line
-            #desired = self.current_line + self.data.count('\n', self.i, j)
-            
-            i = self.i + 2 # after /*
-            while i < j:
-              eol = self.data.find('\n', i, j)
-              if eol == -1: eol = j
-              while i < eol:
-                if self.data[i].isspace():
-                  self.consume_whitespace()
-                word_i = i
-                word_j = word_i + 1
-                while word_j < eol and not self.data[word_j].isspace():
-                  word_j += 1
-                if word_i != word_j:
-                  token_type = Comment
-                  position = (self.comment_current_line, word_i - self.comment_start_of_line)
-                  token = token_type(self.data[word_i:word_j], position, self.javadoc)
-                  yield token
-                i = word_j + 1
-              i = eol + 1
-              self.comment_start_of_line = i
-              self.comment_current_line += 1
+            self.j = end_of_comment
 
-            if self.data[j-1] != '\n':
-              self.comment_current_line -= 1
-            self.j = j + 2
-
-            self.current_line = self.comment_current_line
-            self.start_of_line = self.comment_start_of_line
-            self.i = self.j 
-
-
-    def try_javadoc_comment(self):
-        javadoc_tokens = []
-        if self.i + 2 >= self.length or self.data[self.i + 2] != '*':
-            return javadoc_tokens
-
-        j = self.data.find('*/', self.i + 2)
-
-        if j == -1:
-            j = self.length
-
-        # cache these for the position counter
-        self.comment_current_line = self.current_line
-        self.comment_start_of_line = self.start_of_line
-        #desired = self.current_line + self.data.count('\n', self.i, j)
-        
-        i = self.i + 2 # after /*
-        while i < j:
-          eol = self.data.find('\n', i, j)
-          if eol == -1: eol = j
-          while i < eol:
-            if self.data[i].isspace():
-              self.consume_whitespace()
-            word_i = i
-            word_j = word_i + 1
-            while word_j < eol and not self.data[word_j].isspace():
-              word_j += 1
-            if word_i != word_j:
-              token_type = Comment
-              position = (self.comment_current_line, word_i - self.comment_start_of_line)
-              token = token_type(self.data[word_i:word_j], position, self.javadoc)
-              javadoc_tokens.append(token)
-            i = word_j + 1
-          i = eol + 1
-          self.comment_start_of_line = i
-          self.comment_current_line += 1
-
-        if self.data[j-1] != '\n':
-          self.comment_current_line -= 1
-        self.j = j + 2
-
-        return javadoc_tokens
+            position = (self.current_line, self.i - self.start_of_line)
+            token = Comment(self.data[self.i:self.j], position)
+            last_newline = token.value.rfind('\n', self.i, self.j)
+            if last_newline != -1:
+                self.start_of_line = last_newline + 1
+            self.current_line += token.value.count('\n')
+            self.i = self.j
+            return token
 
     def read_decimal_float_or_integer(self):
         orig_i = self.i
@@ -586,21 +508,14 @@ class JavaTokenizer(object):
                 c_next = self.data[self.i + 1]
                 startswith = c + c_next
 
+            # Whitespace and multi-line comments have the power to change the
+            # tokenizer's current line, so their tokens are created in-method
             if c.isspace():
-                self.consume_whitespace()
+                yield self.consume_whitespace()
                 continue
 
-            elif startswith in ("//", "/*"):
-                if startswith == "/*" and self.try_javadoc_comment():
-                    comment_tokens = self.try_javadoc_comment()
-                    self.javadoc = self.data[self.i:self.j]
-                    for token in comment_tokens: yield token
-                    self.current_line = self.comment_current_line
-                    self.start_of_line = self.comment_start_of_line
-                    self.i = self.j
-                else:
-                    comment_tokens = self.read_comment()
-                    for token in comment_tokens: yield token
+            elif startswith in ("//", "/*", "*/"):
+                yield self.read_comment()
                 continue
 
             elif startswith == '..' and self.try_operator():
@@ -637,11 +552,8 @@ class JavaTokenizer(object):
                 self.error('Could not process token', c)
 
             position = (self.current_line, self.i - self.start_of_line)
-            token = token_type(self.data[self.i:self.j], position, self.javadoc)
+            token = token_type(self.data[self.i:self.j], position)
             yield token
-
-            if self.javadoc:
-                self.javadoc = None
 
             self.i = self.j
 
@@ -665,58 +577,4 @@ def tokenize(code):
     return tokenizer.tokenize()
 
 def reformat_tokens(tokens):
-    indent = 0
-    closed_block = False
-    ident_last = False
-
-    output = list()
-
-    for token in tokens:
-        if closed_block:
-            closed_block = False
-            indent -= 4
-
-            output.append('\n')
-            output.append(' ' * indent)
-            output.append('}')
-
-            if isinstance(token, (Literal, Keyword, Identifier)):
-                output.append('\n')
-                output.append(' ' * indent)
-
-        if token.value == '{':
-            indent += 4
-            output.append(' {\n')
-            output.append(' ' * indent)
-
-        elif token.value == '}':
-            closed_block = True
-
-        elif token.value == ',':
-            output.append(', ')
-
-        elif isinstance(token, (Literal, Keyword, Identifier)):
-            if ident_last:
-                # If the last token was a literla/keyword/identifer put a space in between
-                output.append(' ')
-            ident_last = True
-            output.append(token.value)
-
-        elif isinstance(token, Operator):
-            output.append(' ' + token.value + ' ')
-
-        elif token.value == ';':
-            output.append(';\n')
-            output.append(' ' * indent)
-
-        else:
-            output.append(token.value)
-
-        ident_last = isinstance(token, (Literal, Keyword, Identifier))
-
-    if closed_block:
-        output.append('\n}')
-
-    output.append('\n')
-
-    return ''.join(output)
+    return ''.join([token.value for token in tokens])
